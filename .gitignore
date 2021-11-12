@@ -1,5 +1,8 @@
 node_modules
 config.yaml
 build
-skype-registration.yaml
+registration.yaml
+xmpp-registration.yaml
 *.db
+*-audit.json
+*.log.*

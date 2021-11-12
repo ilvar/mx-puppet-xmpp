@@ -1,5 +1,5 @@
 /*
-Copyright 2020 mx-puppet-skype
+Copyright 2020 mx-puppet-xmpp
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
 You may obtain a copy of the License at
@@ -11,185 +11,108 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-import { Log, IRemoteRoom, Util } from "mx-puppet-bridge";
+import { Log, IRemoteRoom } from "mx-puppet-bridge";
 import { EventEmitter } from "events";
-import * as skypeHttp from "@sorunome/skype-http";
-import { Contact as SkypeContact } from "@sorunome/skype-http/dist/lib/types/contact";
-import { NewMediaMessage as SkypeNewMediaMessage } from "@sorunome/skype-http/dist/lib/interfaces/api/api";
-import { Context as SkypeContext } from "@sorunome/skype-http/dist/lib/interfaces/api/context";
-import ExpireSet from "expire-set";
-import * as toughCookie from "tough-cookie";
+import { client, xml } from "@xmpp/client";
+import { Client as XmppClient } from "@xmpp/client-core";
 
-const log = new Log("SkypePuppet:client");
+const log = new Log("XmppPuppet:client");
 
-// tslint:disable no-magic-numbers
-const ID_TIMEOUT = 60000;
-const CONTACTS_DELTA_INTERVAL = 5 * 60 * 1000;
-// tslint:enable no-magic-numbers
+type Contact = {
+	personId: string,
+	workloads: any,
+	mri: string,
+	blocked: boolean,
+	authorized: boolean,
+	creationTime: Date,
+	displayName: string,
+	displayNameSource: any, // tslint:disable-line no-any
+	profile: {
+		roomId: string,
+		avatarUrl: string | undefined,
+		name: {
+			first: string | undefined,
+			surname: string | undefined,
+			nickname: string | undefined,
+		},
+	},
+}
 
 export class Client extends EventEmitter {
-	public contacts: Map<string, SkypeContact> = new Map();
-	public conversations: Map<string, skypeHttp.Conversation> = new Map();
-	private api: skypeHttp.Api;
-	private handledIds: ExpireSet<string>;
-	private contactsInterval: NodeJS.Timeout | null = null;
+	public contacts: Map<string, Contact> = new Map();
+	public conversations: Map<string, any> = new Map();
+	private api: XmppClient;
 	constructor(
 		private loginUsername: string,
 		private password: string,
-		private state?: SkypeContext.Json,
-	) {
-		super();
-		this.handledIds = new ExpireSet(ID_TIMEOUT);
-	}
+	) { super(); }
 
 	public get username(): string {
-		return "8:" + this.api.context.username;
+		return this.loginUsername.split("@")[0].trim();
 	}
 
-	public get getState(): SkypeContext.Json {
-		return this.api.getState();
+	public get host(): string {
+		return this.loginUsername.split("@")[1].trim();
+	}
+
+	public get getState() {
+		return {};
 	}
 
 	public async connect() {
-		let connectedWithAuth = false;
-		if (this.state) {
-			try {
-				this.api = await skypeHttp.connect({ state: this.state, verbose: true });
-				connectedWithAuth = true;
-			} catch (err) {
-				this.api = await skypeHttp.connect({
-					credentials: {
-						username: this.loginUsername,
-						password: this.password,
-					},
-					verbose: true,
-				});
-				connectedWithAuth = false;
-			}
-		} else {
-			this.api = await skypeHttp.connect({
-				credentials: {
-					username: this.loginUsername,
-					password: this.password,
-				},
-				verbose: true,
-			});
-			connectedWithAuth = false;
-		}
+		log.info("Connecting to ", this.host);
+		log.info(this.username);
 
-		try {
-			await this.startupApi();
-		} catch (err) {
-			if (!connectedWithAuth) {
-				throw err;
-			}
-			this.api = await skypeHttp.connect({
-				credentials: {
-					username: this.loginUsername,
-					password: this.password,
-				},
-				verbose: true,
-			});
-			connectedWithAuth = false;
-			await this.startupApi();
-		}
+		this.api = client({
+			service: "ws://"+this.host+":5280/xmpp-websocket",
+			domain: this.host,
+			resource: "mx_bridge",
+			username: this.username,
+			password: this.password,
+		});
 
-		const registerErrorHandler = () => {
-			this.api.on("error", (err: Error) => {
-				log.error("An error occured", err);
-				this.emit("error", err);
-			});
-		};
+		await this.startupApi();
 
-		if (connectedWithAuth) {
-			let resolved = false;
-			return new Promise(async (resolve, reject) => {
-				const TIMEOUT_SUCCESS = 5000;
-				setTimeout(() => {
-					if (resolved) {
-						return;
-					}
-					resolved = true;
-					registerErrorHandler();
-					resolve();
-				}, TIMEOUT_SUCCESS);
-				this.api.once("error", async () => {
-					if (resolved) {
-						return;
-					}
-					resolved = true;
-					// alright, re-try as normal user
-					try {
-						await this.api.stopListening();
-						this.api = await skypeHttp.connect({
-							credentials: {
-								username: this.loginUsername,
-								password: this.password,
-							},
-							verbose: true,
-						});
-						await this.startupApi();
-						registerErrorHandler();
-						resolve();
-					} catch (err) {
-						reject(err);
-					}
-				});
-				await this.api.listen();
-			}).then(async () => {
-				await this.api.setStatus("Online");
-			});
-		} else {
-			registerErrorHandler();
-			await this.api.listen();
-			await this.api.setStatus("Online");
-		}
+		this.api.on("error", (err: Error) => {
+			log.error("An error occured", err);
+			this.emit("error", err);
+		});
+		this.api.start();
 	}
 
 	public async disconnect() {
 		if (this.api) {
-			await this.api.stopListening();
-		}
-		if (this.contactsInterval) {
-			clearInterval(this.contactsInterval);
-			this.contactsInterval = null;
+			await this.api.stop();
 		}
 	}
 
-	public async getContact(id: string): Promise<SkypeContact | null> {
-		log.debug(`Fetching contact ${id}`);
-		const hasStart = Boolean(id.match(/^\d+:/));
-		const fullId = hasStart ? id : `8:${id}`;
-		if (this.contacts.has(fullId)) {
-			log.debug("Returning cached result");
-			const ret = this.contacts.get(fullId) || null;
-			log.silly(ret);
+	public async getContact(username: string): Promise<any> {
+		log.debug(`Fetching contact from: ` + username);
+		if (this.contacts.has(username)) {
+			const ret = this.contacts.get(username);
 			return ret;
 		}
-		if (hasStart) {
-			id = id.substr(id.indexOf(":") + 1);
-		}
 		try {
-			const rawContact = await this.api.getContact(id);
-			const contact: SkypeContact = {
-				personId: rawContact.id.raw,
+			const contact = {
+				personId: username,
 				workloads: null,
-				mri: rawContact.id.raw,
+				mri: username,
 				blocked: false,
 				authorized: true,
 				creationTime: new Date(),
-				displayName: (rawContact.name && rawContact.name.displayName) || rawContact.id.id,
+				displayName: username,
 				displayNameSource: "profile" as any, // tslint:disable-line no-any
 				profile: {
-					avatarUrl: rawContact.avatarUrl || undefined,
+					roomId: username,
+					avatarUrl: undefined,
 					name: {
-						first: (rawContact.name && rawContact.name).first || undefined,
-						surname: (rawContact.name && rawContact.name).surname || undefined,
-						nickname: (rawContact.name && rawContact.name).nickname || undefined,
+						first: undefined,
+						surname: undefined,
+						nickname: username,
 					},
 				},
 			};
-			this.contacts.set(contact.mri, contact || null);
+			this.contacts.set(contact.mri, contact);
 			log.debug("Returning new result");
 			log.silly(contact);
 			return contact || null;
@@ -201,181 +124,93 @@ export class Client extends EventEmitter {
 		}
 	}
 
-	public async getConversation(room: IRemoteRoom): Promise<skypeHttp.Conversation | null> {
-		log.debug(`Fetching conversation puppetId=${room.puppetId} roomId=${room.roomId}`);
+	public async getConversation(room: IRemoteRoom): Promise<any> {
+		log.info(`Fetching conversation`, room);
+		log.info(`Fetching conversation puppetId=${room.puppetId} roomId=${room.roomId}`);
 		let id = room.roomId;
-		const match = id.match(/^dm-\d+-/);
-		if (match) {
-			const [_, puppetId] = id.split("-");
-			if (Number(puppetId) !== room.puppetId) {
-				return null;
-			}
-			id = id.substr(match[0].length);
-		}
 		if (this.conversations.has(id)) {
-			log.debug("Returning cached result");
+			log.info("Returning cached result");
 			const ret = this.conversations.get(id) || null;
 			log.silly(ret);
 			return ret;
 		}
 		try {
-			const conversation = await this.api.getConversation(id);
-			this.conversations.set(conversation.id, conversation || null);
-			log.debug("Returning new result");
-			log.silly(conversation);
+			const conversation = {id: room.roomId, members: []};
+			this.conversations.set(room.roomId, conversation || null);
+			log.info("Returning new result");
+			log.info(conversation);
 			return conversation || null;
 		} catch (err) {
 			// conversation not found
-			log.debug("No such conversation found");
-			log.debug(err.body || err);
+			log.error("No such conversation found");
+			log.error(err.body || err);
 			return null;
 		}
 	}
 
-	public async downloadFile(url: string, type: string = "imgpsh_fullsize_anim"): Promise<Buffer> {
-		if (url.startsWith("https://api.asm.skype.com/") && !url.includes("/views/")) {
-			url = `${url}/views/${type}`;
-		}
-		const cookieJar = new toughCookie.CookieJar(this.api.context.cookies);
-		return await Util.DownloadFile(url, {
-			responseType: "buffer",
-			headers: {
-				Authorization: "skypetoken=" + this.api.context.skypeToken.value,
-				RegistrationToken: this.api.context.registrationToken.raw,
-			},
-			cookieJar: {
-				setCookie: async (rawCookie: string, cookieUrl: string) =>
-					new Promise((resolve, reject) =>
-						cookieJar.setCookie(rawCookie, cookieUrl, (err, value) =>
-							err ? reject(err) : resolve(value),
-						),
-					),
-				getCookieString: async (cookieUrl: string) =>
-					new Promise((resolve, reject) =>
-						cookieJar.getCookieString(cookieUrl, (err, value) => {
-							if (err) {
-								reject(err);
-								return;
-							}
-							if (url.startsWith("https://api.asm.skype.com/")) {
-								if (value) {
-									value += "; ";
-								}
-								value += "skypetoken_asm=" + encodeURIComponent(this.api.context.skypeToken.value);
-							}
-							resolve(value);
-						}),
-					),
-			},
-		});
+	public async downloadFile(url: string, type: string = "imgpsh_fullsize_anim") {
+		// TODO
 	}
 
-	public async sendMessage(conversationId: string, msg: string): Promise<skypeHttp.Api.SendMessageResult> {
-		return await this.api.sendMessage({
-			textContent: msg,
-		}, conversationId);
+	public async sendMessage(conversationId: string, msg: string) {
+		return await this.api.send(xml(
+			"message",
+			{ type: "chat", to: conversationId },
+			xml("body", {}, msg),
+		));
 	}
 
 	public async sendEdit(conversationId: string, messageId: string, msg: string) {
-		return await this.api.sendEdit({
-			textContent: msg,
-		}, conversationId, messageId);
+		// TODO
+		// return await this.api.sendEdit({
+		// 	textContent: msg,
+		// }, conversationId, messageId);
 	}
 
 	public async sendDelete(conversationId: string, messageId: string) {
-		return await this.api.sendDelete(conversationId, messageId);
+		// TODO
+		// return await this.api.sendDelete(conversationId, messageId);
 	}
 
 	public async sendAudio(
 		conversationId: string,
-		opts: SkypeNewMediaMessage,
-	): Promise<skypeHttp.Api.SendMessageResult> {
-		return await this.api.sendAudio(opts, conversationId);
+		opts: any,
+	) {
+		// TODO
+		// return await this.api.sendAudio(opts, conversationId);
 	}
 
 	public async sendDocument(
 		conversationId: string,
-		opts: SkypeNewMediaMessage,
-	): Promise<skypeHttp.Api.SendMessageResult> {
-		return await this.api.sendDocument(opts, conversationId);
+		opts: any,
+	) {
+		// TODO
+		// return await this.api.sendDocument(opts, conversationId);
 	}
 
 	public async sendImage(
 		conversationId: string,
-		opts: SkypeNewMediaMessage,
-	): Promise<skypeHttp.Api.SendMessageResult> {
-		return await this.api.sendImage(opts, conversationId);
+		opts: any,
+	) {
+		// TODO
+		// return await this.api.sendImage(opts, conversationId);
 	}
 
 	private async startupApi() {
-		this.api.on("event", (evt: skypeHttp.events.EventMessage) => {
-			if (!evt || !evt.resource) {
-				return;
-			}
-			const resource = evt.resource;
-			log.debug(`Got new event of type ${resource.type}`);
-			log.silly(evt);
-			const [type, subtype] = resource.type.split("/");
-			switch (type) {
-				case "RichText":
-					if (evt.resourceType === "NewMessage") {
-						if (resource.native.skypeeditedid || this.handledIds.has(resource.id)) {
-							break;
-						}
-						this.handledIds.add(resource.id);
-						if (subtype === "Location") {
-							this.emit("location", resource);
-						} else if (subtype) {
-							this.emit("file", resource);
-						} else {
-							this.emit("text", resource);
-						}
-					} else if (evt.resourceType === "MessageUpdate") {
-						this.emit("edit", resource);
-					}
-					break;
-				case "Control":
-					if (subtype === "Typing" || subtype === "ClearTyping") {
-						this.emit("typing", resource, subtype === "Typing");
-					}
-					break;
-				case "ThreadActivity":
-					if (subtype === "MemberConsumptionHorizonUpdate") {
-						this.emit("presence", resource);
-					}
-					break;
+		this.api.on("stanza", async (stanza) => {
+			if (stanza.is("message")) {
+				this.emit("text", stanza);
 			}
 		});
+		  
+		this.api.on("online", async (address) => {
+			await this.api.send(xml("presence"));
+		});
 
-		const contacts = await this.api.getContacts();
-		for (const contact of contacts) {
-			this.contacts.set(contact.mri, contact);
-		}
-		const conversations = await this.api.getConversations();
-		for (const conversation of conversations) {
-			this.conversations.set(conversation.id, conversation);
-		}
-
-		if (this.contactsInterval) {
-			clearInterval(this.contactsInterval);
-			this.contactsInterval = null;
-		}
-		this.contactsInterval = setInterval(this.updateContacts.bind(this), CONTACTS_DELTA_INTERVAL);
-	}
-
-	private async updateContacts() {
-		log.verbose("Getting contacts diff....");
-		try {
-			const contacts = await this.api.getContacts(true);
-			const MANY_CONTACTS = 5;
-			for (const contact of contacts) {
-				const oldContact = this.contacts.get(contact.mri) || null;
-				this.contacts.set(contact.mri, contact);
-				this.emit("updateContact", oldContact, contact);
-			}
-		} catch (err) {
-			log.error("Failed to get contacts diff", err);
-			this.emit("error", err);
-		}
+		// const contacts = await this.api.getContacts();
+		// for (const contact of contacts) {
+		// 	this.contacts.set(contact.mri, contact);
+		// }
 	}
 }
+

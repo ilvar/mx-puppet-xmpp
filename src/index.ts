@@ -1,5 +1,5 @@
 /*
-Copyright 2020 mx-puppet-skype
+Copyright 2020 mx-puppet-xmpp
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
 You may obtain a copy of the License at
@@ -23,10 +23,10 @@ import * as commandLineArgs from "command-line-args";
 import * as commandLineUsage from "command-line-usage";
 import * as fs from "fs";
 import * as yaml from "js-yaml";
-import { Skype } from "./skype";
+import { Xmpp } from "./xmpp";
 import { Client } from "./client";
 
-const log = new Log("SkypePuppet:index");
+const log = new Log("XmppPuppet:index");
 
 const commandOptions = [
 	{ name: "register", alias: "r", type: Boolean },
@@ -36,7 +36,7 @@ const commandOptions = [
 ];
 const options = Object.assign({
 	"register": false,
-	"registration-file": "skype-registration.yaml",
+	"registration-file": "xmpp-registration.yaml",
 	"config": "config.yaml",
 	"help": false,
 }, commandLineArgs(commandOptions));
@@ -45,8 +45,8 @@ if (options.help) {
 	// tslint:disable-next-line:no-console
 	console.log(commandLineUsage([
 		{
-			header: "Matrix Skype Puppet Bridge",
-			content: "A matrix puppet bridge for Skype",
+			header: "Matrix Xmpp Puppet Bridge",
+			content: "A matrix puppet bridge for Xmpp",
 		},
 		{
 			header: "Options",
@@ -58,16 +58,16 @@ if (options.help) {
 
 const protocol: IProtocolInformation = {
 	features: {
-		image: true,
-		audio: true,
-		file: true,
-		edit: true,
-		reply: true,
+		image: false,
+		audio: false,
+		file: false,
+		edit: false,
+		reply: false,
 		globalNamespace: true,
 	},
-	id: "skype",
-	displayname: "Skype",
-	externalUrl: "https://skype.com/",
+	id: "xmpp",
+	displayname: "Xmpp",
+	externalUrl: "https://xmpp.com/",
 };
 
 const puppet = new PuppetBridge(options["registration-file"], options.config, protocol);
@@ -77,8 +77,8 @@ if (options.register) {
 	puppet.readConfig(false);
 	try {
 		puppet.generateRegistration({
-			prefix: "_skypepuppet_",
-			id: "skype-puppet",
+			prefix: "_xmpppuppet_",
+			id: "xmpp-puppet",
 			url: `http://${puppet.Config.bridge.bindAddress}:${puppet.Config.bridge.port}`,
 		});
 	} catch (err) {
@@ -90,24 +90,24 @@ if (options.register) {
 
 async function run() {
 	await puppet.init();
-	const skype = new Skype(puppet);
-	puppet.on("puppetNew", skype.newPuppet.bind(skype));
-	puppet.on("puppetDelete", skype.deletePuppet.bind(skype));
-	puppet.on("message", skype.handleMatrixMessage.bind(skype));
-	puppet.on("edit", skype.handleMatrixEdit.bind(skype));
-	puppet.on("reply", skype.handleMatrixReply.bind(skype));
-	puppet.on("redact", skype.handleMatrixRedact.bind(skype));
-	puppet.on("image", skype.handleMatrixImage.bind(skype));
-	puppet.on("audio", skype.handleMatrixAudio.bind(skype));
-	puppet.on("file", skype.handleMatrixFile.bind(skype));
-	puppet.setCreateUserHook(skype.createUser.bind(skype));
-	puppet.setCreateRoomHook(skype.createRoom.bind(skype));
-	puppet.setGetDmRoomIdHook(skype.getDmRoom.bind(skype));
-	puppet.setListUsersHook(skype.listUsers.bind(skype));
-	puppet.setListRoomsHook(skype.listRooms.bind(skype));
-	puppet.setGetUserIdsInRoomHook(skype.getUserIdsInRoom.bind(skype));
+	const xmpp = new Xmpp(puppet);
+	puppet.on("puppetNew", xmpp.newPuppet.bind(xmpp));
+	puppet.on("puppetDelete", xmpp.deletePuppet.bind(xmpp));
+	puppet.on("message", xmpp.handleMatrixMessage.bind(xmpp));
+	puppet.on("edit", xmpp.handleMatrixEdit.bind(xmpp));
+	puppet.on("reply", xmpp.handleMatrixReply.bind(xmpp));
+	puppet.on("redact", xmpp.handleMatrixRedact.bind(xmpp));
+	puppet.on("image", xmpp.handleMatrixImage.bind(xmpp));
+	puppet.on("audio", xmpp.handleMatrixAudio.bind(xmpp));
+	puppet.on("file", xmpp.handleMatrixFile.bind(xmpp));
+	puppet.setCreateUserHook(xmpp.createUser.bind(xmpp));
+	puppet.setCreateRoomHook(xmpp.createRoom.bind(xmpp));
+	puppet.setGetDmRoomIdHook(xmpp.getDmRoom.bind(xmpp));
+	puppet.setListUsersHook(xmpp.listUsers.bind(xmpp));
+	puppet.setListRoomsHook(xmpp.listRooms.bind(xmpp));
+	puppet.setGetUserIdsInRoomHook(xmpp.getUserIdsInRoom.bind(xmpp));
 	puppet.setGetDescHook(async (puppetId: number, data: any): Promise<string> => {
-		let s = "Skype";
+		let s = "Xmpp";
 		if (data.username) {
 			s += ` as \`${data.username}\``;
 		}
@@ -139,7 +139,7 @@ async function run() {
 		return retData;
 	});
 	puppet.setBotHeaderMsgHook((): string => {
-		return "Skype Puppet Bridge";
+		return "Xmpp Puppet Bridge";
 	});
 	await puppet.start();
 }

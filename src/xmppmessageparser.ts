@@ -1,5 +1,5 @@
 /*
-Copyright 2020 mx-puppet-skype
+Copyright 2020 mx-puppet-xmpp
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
 You may obtain a copy of the License at
@@ -17,12 +17,12 @@ import * as escapeHtml from "escape-html";
 import { IMessageEvent } from "mx-puppet-bridge";
 import * as emoji from "node-emoji";
 
-interface ISkypeMessageParserOpts {
+interface IXmppMessageParserOpts {
 	noQuotes?: boolean;
 }
 
-export class SkypeMessageParser {
-	public parse(msg: string, opts: ISkypeMessageParserOpts = {}): IMessageEvent {
+export class XmppMessageParser {
+	public parse(msg: string, opts: IXmppMessageParserOpts = {}): IMessageEvent {
 		opts = Object.assign({
 			noQuotes: false,
 		}, opts);
@@ -33,7 +33,7 @@ export class SkypeMessageParser {
 		return this.walkNode(nodes, opts);
 	}
 
-	private walkChildNodes(node: Parser.Node, opts: ISkypeMessageParserOpts): IMessageEvent {
+	private walkChildNodes(node: Parser.Node, opts: IXmppMessageParserOpts): IMessageEvent {
 		if (!node.childNodes.length) {
 			return {
 				body: "",
@@ -55,7 +55,7 @@ export class SkypeMessageParser {
 		};
 	}
 
-	private walkNode(node: Parser.Node, opts: ISkypeMessageParserOpts): IMessageEvent {
+	private walkNode(node: Parser.Node, opts: IXmppMessageParserOpts): IMessageEvent {
 		if (node.nodeType === Parser.NodeType.TEXT_NODE) {
 			return this.escape((node as Parser.TextNode).text);
 		} else if (node.nodeType === Parser.NodeType.ELEMENT_NODE) {
@@ -111,7 +111,7 @@ export class SkypeMessageParser {
 					};
 				}
 				case "ss": {
-					// skype emoji
+					// xmpp emoji
 					const type = nodeHtml.attributes.type;
 					let emojiType = {
 						smile: "slightly_smiling_face",

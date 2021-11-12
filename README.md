@@ -1,11 +1,17 @@
-[![Support room on Matrix](https://img.shields.io/matrix/mx-puppet-bridge:sorunome.de.svg?label=%23mx-puppet-bridge%3Asorunome.de&logo=matrix&server_fqdn=sorunome.de)](https://matrix.to/#/#mx-puppet-bridge:sorunome.de)[![donate](https://liberapay.com/assets/widgets/donate.svg)](https://liberapay.com/Sorunome/donate)
+[![donate](https://liberapay.com/assets/widgets/donate.svg)](https://liberapay.com/rkd/donate)
 
-# mx-puppet-skype
-This is a skype puppeting bridge for matrix. It is based on [mx-puppet-bridge](https://github.com/Sorunome/mx-puppet-bridge) and provide multi-user instances.
+# [WIP] mx-puppet-xmpp
+This is a xmpp puppeting bridge for matrix. It is based on [mx-puppet-bridge](https://github.com/Sorunome/mx-puppet-bridge) and provide multi-user instances.
+
+##
 
 ## Quick start using Docker
 
-Docker image can be found at https://hub.docker.com/r/sorunome/mx-puppet-skype
+To build docker image:
+
+```
+docker build -t mx-puppet-xmpp:latest .
+```
 
 For docker you probably want the following changes in `config.yaml`:
 
@@ -21,16 +27,16 @@ Also check the config for other values, like your homeserver domain.
 
 *   Clone and install:
     ```
-    git clone https://github.com/Sorunome/mx-puppet-skype.git
-    cd mx-puppet-skype
+    git clone https://github.com/Sorunome/mx-puppet-xmpp.git
+    cd mx-puppet-xmpp
     npm install
 *   Edit the configuration file and generate the registration file:
     ```
     cp sample.config.yaml config.yaml
-    # fill info about your homeserver and skype app credentials to config.yaml manually
+    # fill info about your homeserver and xmpp app credentials to config.yaml manually
     npm run start -- -r # generate registration file
     or
-    docker run -v </path/to/host>/data:/data -it sorunome/mx-puppet-skype -r
+    docker run -v </path/to/host>/data:/data -it mx-puppet-xmpp -r
     ```
 *   Copy the registration file to your synapse config directory.
 *   Add the registration file to the list under `app_service_config_files:` in your synapse config.
@@ -39,9 +45,9 @@ Also check the config for other values, like your homeserver domain.
     ```
     npm run start
     ```
-*   Start a direct chat with the bot user (`@_skypepuppet_bot:domain.tld` unless you changed the config).
+*   Start a direct chat with the bot user (`@_xmpppuppet_bot:domain.tld` unless you changed the config).
     (Give it some time after the invite, it'll join after a minute maybe.)
-*   Get your Skype username and password as below, and tell the bot user to link your skype account:
+*   Get your Xmpp username and password as below, and tell the bot user to link your xmpp account:
     ```
     link <username> <password>
     ```
@@ -50,3 +56,17 @@ Also check the config for other values, like your homeserver domain.
     list
     ```
     Clicking rooms in the list will result in you receiving an invite to the bridged room.
+
+## Working
+
+- link
+- text messages (mx -> xmpp)
+- text messages (xmpp -> mx)
+
+## TODO
+
+- replies
+- edits
+- deletes
+- images
+- files

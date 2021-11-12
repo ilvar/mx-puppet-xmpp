@@ -1,5 +1,5 @@
 /*
-Copyright 2020 mx-puppet-skype
+Copyright 2020 mx-puppet-xmpp
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
 You may obtain a copy of the License at
@@ -16,46 +16,46 @@ import {
 	IRetList, IReplyEvent,
 } from "mx-puppet-bridge";
 import { Client } from "./client";
-import * as skypeHttp from "@sorunome/skype-http";
-import { Contact as SkypeContact } from "@sorunome/skype-http/dist/lib/types/contact";
-import { NewMediaMessage as SkypeNewMediaMessage } from "@sorunome/skype-http/dist/lib/interfaces/api/api";
-import { UnexpectedHttpStatusError } from "@sorunome/skype-http/dist/lib/errors";
 import * as decodeHtml from "decode-html";
 import * as escapeHtml from "escape-html";
 import { MatrixMessageParser } from "./matrixmessageparser";
-import { SkypeMessageParser } from "./skypemessageparser";
+import { XmppMessageParser } from "./xmppmessageparser";
 import * as cheerio from "cheerio";
 import ExpireSet from "expire-set";
 
-const log = new Log("SkypePuppet:skype");
+const log = new Log("XmppPuppet:xmpp");
 
-const ROOM_TYPE_DM = 8;
-
-interface ISkypePuppet {
+interface IXmppPuppet {
 	client: Client;
 	data: any;
 	deletedMessages: ExpireSet<string>;
 	restarting: boolean;
 }
 
-interface ISkypePuppets {
-	[puppetId: number]: ISkypePuppet;
+interface IXmppPuppets {
+	[puppetId: number]: IXmppPuppet;
 }
 
-export class Skype {
-	private puppets: ISkypePuppets = {};
+interface IStanza {
+	attrs: {to: string, from:string, id: string};
+
+	getChild(path: string): {text: () => string}
+}
+
+export class Xmpp {
+	private puppets: IXmppPuppets = {};
 	private messageDeduplicator: MessageDeduplicator;
 	private matrixMessageParser: MatrixMessageParser;
-	private skypeMessageParser: SkypeMessageParser;
+	private xmppMessageParser: XmppMessageParser;
 	constructor(
 		private puppet: PuppetBridge,
 	) {
 		this.messageDeduplicator = new MessageDeduplicator();
 		this.matrixMessageParser = new MatrixMessageParser();
-		this.skypeMessageParser = new SkypeMessageParser();
+		this.xmppMessageParser = new XmppMessageParser();
 	}
 
-	public getUserParams(puppetId: number, contact: SkypeContact): IRemoteUser {
+	public getUserParams(puppetId: number, contact: any): IRemoteUser {
 		return {
 			puppetId,
 			userId: contact.mri,
@@ -64,55 +64,38 @@ export class Skype {
 		};
 	}
 
-	public getRoomParams(puppetId: number, conversation: skypeHttp.Conversation): IRemoteRoom {
-		const roomType = Number(conversation.id.split(":")[0]);
-		const isDirect = roomType === ROOM_TYPE_DM;
-		if (isDirect) {
-			return {
-				puppetId,
-				roomId: `dm-${puppetId}-${conversation.id}`,
-				isDirect: true,
-			};
-		}
+	public getRoomParams(puppetId: number, conversation: any): IRemoteRoom {
 		let avatarUrl: string | null = null;
 		let name: string | null = null;
-		if (conversation.threadProperties) {
-			name = conversation.threadProperties.topic || null;
-			if (name) {
-				name = decodeHtml(name);
-			}
-			const picture = conversation.threadProperties.picture;
-			if (picture && picture.startsWith("URL@")) {
-				avatarUrl = picture.slice("URL@".length);
-			}
-		}
 		const p = this.puppets[puppetId];
 		return {
 			puppetId,
 			roomId: conversation.id,
 			name,
 			avatarUrl,
-			downloadFile: async (url: string): Promise<Buffer> => {
+			downloadFile: async (url: string): Promise<any> => {
 				return await p.client.downloadFile(url, "swx_avatar");
 			},
 		};
 	}
 
-	public async getSendParams(puppetId: number, resource: skypeHttp.resources.Resource): Promise<IReceiveParams | null> {
-		const roomType = Number(resource.conversation.split(":")[0]);
+	public async getSendParams(puppetId: number, stanza: IStanza): Promise<IReceiveParams | null> {
 		const p = this.puppets[puppetId];
-		const contact = await p.client.getContact(resource.from.raw);
+		const contact = await p.client.getContact(stanza.attrs.from);
+		log.info("stanza.attrs", stanza.attrs);
 		const conversation = await p.client.getConversation({
-			puppetId,
-			roomId: resource.conversation,
+			puppetId: puppetId,
+			roomId: stanza.attrs.from.split("/")[0],
 		});
+		log.info("Received contact", contact);
+		log.info("Received conversation", conversation);
 		if (!contact || !conversation) {
 			return null;
 		}
 		return {
 			user: this.getUserParams(puppetId, contact),
 			room: this.getRoomParams(puppetId, conversation),
-			eventId: resource.id, // tslint:disable-line no-any
+			eventId: stanza.attrs.id, // tslint:disable-line no-any
 		};
 	}
 
@@ -130,51 +113,58 @@ export class Skype {
 			return;
 		}
 		await this.stopClient(puppetId);
-		p.client = new Client(p.data.username, p.data.password, p.data.state);
+		p.client = new Client(p.data.username, p.data.password);
 		const client = p.client;
-		client.on("text", async (resource: skypeHttp.resources.TextResource) => {
+		client.on("text", async (stanza: any) => {
 			try {
-				await this.handleSkypeText(puppetId, resource);
+				await this.handleXmppText(puppetId, stanza);
 			} catch (err) {
 				log.error("Error while handling text event", err);
 			}
 		});
-		client.on("edit", async (resource: skypeHttp.resources.RichTextResource) => {
+		client.on("edit", async (stanza: any) => {
 			try {
-				await this.handleSkypeEdit(puppetId, resource);
+				await this.handleXmppEdit(puppetId, stanza);
 			} catch (err) {
 				log.error("Error while handling edit event", err);
 			}
 		});
-		client.on("location", async (resource: skypeHttp.resources.RichTextLocationResource) => {
+		client.on("location", async (stanza: any) => {
 			try {
 
 			} catch (err) {
 				log.error("Error while handling location event", err);
 			}
 		});
-		client.on("file", async (resource: skypeHttp.resources.FileResource) => {
+		client.on("file", async (stanza: any) => {
 			try {
-				await this.handleSkypeFile(puppetId, resource);
+				await this.handleXmppFile(puppetId, stanza);
 			} catch (err) {
 				log.error("Error while handling file event", err);
 			}
 		});
-		client.on("typing", async (resource: skypeHttp.resources.Resource, typing: boolean) => {
+		client.on("typing", async (stanza: any, typing: boolean) => {
 			try {
-				await this.handleSkypeTyping(puppetId, resource, typing);
+				await this.handleXmppTyping(puppetId, stanza, typing);
 			} catch (err) {
 				log.error("Error while handling typing event", err);
 			}
 		});
-		client.on("presence", async (resource: skypeHttp.resources.Resource) => {
+		client.on("presence", async (stanza: any) => {
 			try {
-				await this.handleSkypePresence(puppetId, resource);
+				await this.handleXmppPresence(puppetId, stanza);
 			} catch (err) {
 				log.error("Error while handling presence event", err);
 			}
 		});
-		client.on("updateContact", async (oldContact: SkypeContact | null, newContact: SkypeContact) => {
+		client.on("receipt", async (stanza: any) => {
+			try {
+				await this.handleXmppPresence(puppetId, stanza);
+			} catch (err) {
+				log.error("Error while handling receipt event", err);
+			}
+		});
+		client.on("updateContact", async (oldContact: any | null, newContact: any) => {
 			try {
 				let update = oldContact === null;
 				const newUser = this.getUserParams(puppetId, newContact);
@@ -197,16 +187,7 @@ export class Skype {
 			}
 			p.restarting = true;
 			const causeName = (err as any).cause ? (err as any).cause.name : "";
-			log.error("Error when polling");
-			log.error("name: ", err.name);
-			const errr = err as any;
-			if (errr.cause) {
-				log.error("cause name: ", errr.cause.name);
-			}
-			log.error("code: ", errr.code);
-			log.error("body: ", errr.body);
-			log.error("cause: ", errr.cause);
-			log.error("data: ", errr.data);
+			log.error("Error when polling", err.message);
 			log.error(err);
 			if (causeName === "UnexpectedHttpStatus") {
 				await this.puppet.sendStatusMessage(puppetId, "Error: " + err);
@@ -346,6 +327,7 @@ export class Skype {
 		if (!p) {
 			return null;
 		}
+		log.info("getUserIdsInRoom", room);
 		const conversation = await p.client.getConversation(room);
 		if (!conversation) {
 			return null;
@@ -356,10 +338,12 @@ export class Skype {
 				users.add(member);
 			}
 		}
+		log.info("getUserIdsInRoom users", users);
 		return users;
 	}
 
 	public async handleMatrixMessage(room: IRemoteRoom, data: IMessageEvent) {
+		log.info("handleMatrixMessage");
 		const p = this.puppets[room.puppetId];
 		if (!p) {
 			return;
@@ -414,6 +398,7 @@ export class Skype {
 	}
 
 	public async handleMatrixReply(room: IRemoteRoom, eventId: string, data: IReplyEvent) {
+		log.info("handleMatrixReply");
 		const p = this.puppets[room.puppetId];
 		if (!p) {
 			return;
@@ -481,230 +466,209 @@ export class Skype {
 	}
 
 	public async handleMatrixImage(room: IRemoteRoom, data: IFileEvent) {
-		await this.handleMatrixFile(room, data, "sendImage");
+		// TODO
+		// await this.handleMatrixFile(room, data, "sendImage");
 	}
 
 	public async handleMatrixAudio(room: IRemoteRoom, data: IFileEvent) {
-		await this.handleMatrixFile(room, data, "sendAudio");
+		// TODO
+		// await this.handleMatrixFile(room, data, "sendAudio");
 	}
 
 	public async handleMatrixFile(room: IRemoteRoom, data: IFileEvent, method?: string) {
-		if (!method) {
-			method = "sendDocument";
-		}
-		const p = this.puppets[room.puppetId];
-		if (!p) {
-			return;
-		}
-		log.info("Received file from matrix");
-		const conversation = await p.client.getConversation(room);
-		if (!conversation) {
-			log.warn(`Room ${room.roomId} not found!`);
-			return;
-		}
-		const buffer = await Util.DownloadFile(data.url);
-		const opts: SkypeNewMediaMessage = {
-			file: buffer,
-			name: data.filename,
-		};
-		if (data.info) {
-			if (data.info.w) {
-				opts.width = data.info.w;
-			}
-			if (data.info.h) {
-				opts.height = data.info.h;
-			}
-		}
-		const dedupeKey = `${room.puppetId};${room.roomId}`;
-		this.messageDeduplicator.lock(dedupeKey, p.client.username, `file:${data.filename}`);
-		const ret = await p.client[method](conversation.id, opts);
-		const eventId = ret && ret.MessageId;
-		this.messageDeduplicator.unlock(dedupeKey, p.client.username, eventId);
-		if (eventId) {
-			await this.puppet.eventSync.insert(room, data.eventId!, eventId);
-		}
+		// TODO
+		// if (!method) {
+		// 	method = "sendDocument";
+		// }
+		// const p = this.puppets[room.puppetId];
+		// if (!p) {
+		// 	return;
+		// }
+		// log.info("Received file from matrix");
+		// const conversation = await p.client.getConversation(room);
+		// if (!conversation) {
+		// 	log.warn(`Room ${room.roomId} not found!`);
+		// 	return;
+		// }
+		// const buffer = await Util.DownloadFile(data.url);
+		// const opts: XmppNewMediaMessage = {
+		// 	file: buffer,
+		// 	name: data.filename,
+		// };
+		// if (data.info) {
+		// 	if (data.info.w) {
+		// 		opts.width = data.info.w;
+		// 	}
+		// 	if (data.info.h) {
+		// 		opts.height = data.info.h;
+		// 	}
+		// }
+		// const dedupeKey = `${room.puppetId};${room.roomId}`;
+		// this.messageDeduplicator.lock(dedupeKey, p.client.username, `file:${data.filename}`);
+		// const ret = await p.client[method](conversation.id, opts);
+		// const eventId = ret && ret.MessageId;
+		// this.messageDeduplicator.unlock(dedupeKey, p.client.username, eventId);
+		// if (eventId) {
+		// 	await this.puppet.eventSync.insert(room, data.eventId!, eventId);
+		// }
 	}
 
-	private async handleSkypeText(
+	private async handleXmppText(
 		puppetId: number,
-		resource: skypeHttp.resources.TextResource | skypeHttp.resources.RichTextResource,
+		stanza: IStanza,
 	) {
 		const p = this.puppets[puppetId];
 		if (!p) {
 			return;
 		}
-		const rich = resource.native.messagetype.startsWith("RichText");
-		log.info("Got new skype message");
-		log.silly(resource);
-		const params = await this.getSendParams(puppetId, resource);
+		log.info("Got new xmpp message");
+		log.silly(stanza);
+		const params = await this.getSendParams(puppetId, stanza);
 		if (!params) {
 			log.warn("Couldn't generate params");
 			return;
 		}
-		let msg = resource.content;
+		let msg = stanza.getChild("body").text();
 		let emote = false;
-		if (resource.native.skypeemoteoffset) {
-			emote = true;
-			msg = msg.substr(Number(resource.native.skypeemoteoffset));
-		}
 		const dedupeKey = `${puppetId};${params.room.roomId}`;
-		if (rich && msg.trim().startsWith("<URIObject") && msg.trim().endsWith("</URIObject>")) {
-			// okay, we might have a sticker or something...
-			const $ = cheerio.load(msg);
-			const obj = $("URIObject");
-			let uri = obj.attr("uri");
-			const filename = $(obj.find("OriginalName")).attr("v");
-			if (uri) {
-				if (await this.messageDeduplicator.dedupe(dedupeKey, params.user.userId, params.eventId, `file:${filename}`)) {
-					log.silly("file message dedupe");
-					return;
-				}
-				uri += "/views/thumblarge";
-				uri = uri.replace("static.asm.skype.com", "static-asm.secure.skypeassets.com");
-				const buffer = await p.client.downloadFile(uri);
-				await this.puppet.sendFileDetect(params, buffer, filename);
-				return;
-			}
-		}
+
 		if (await this.messageDeduplicator.dedupe(dedupeKey, params.user.userId, params.eventId, msg)) {
 			log.silly("normal message dedupe");
 			return;
 		}
-		if (rich && msg.trim().startsWith("<quote")) {
+		if (msg.trim().startsWith("<quote")) {
+			// TODO
 			// okay, we might have a reply...
-			const $ = cheerio.load(msg);
-			const quote = $("quote");
-			const messageid = quote.attr("messageid");
-			if (messageid) {
-				const sendQuoteMsg = this.skypeMessageParser.parse(msg, { noQuotes: true });
-				await this.puppet.sendReply(params, messageid, sendQuoteMsg);
-				return;
-			}
+			// const $ = cheerio.load(msg);
+			// const quote = $("quote");
+			// const messageid = quote.attr("messageid");
+			// if (messageid) {
+			// 	const sendQuoteMsg = this.xmppMessageParser.parse(msg, { noQuotes: true });
+			// 	await this.puppet.sendReply(params, messageid, sendQuoteMsg);
+			// 	return;
+			// }
 		}
 		let sendMsg: IMessageEvent;
-		if (rich) {
-			sendMsg = this.skypeMessageParser.parse(msg);
-		} else {
-			sendMsg = {
-				body: msg,
-			};
-		}
-		if (emote) {
-			sendMsg.emote = true;
-		}
+		sendMsg = {
+			body: msg,
+		};
 		await this.puppet.sendMessage(params, sendMsg);
 	}
 
-	private async handleSkypeEdit(
+	private async handleXmppEdit(
 		puppetId: number,
-		resource: skypeHttp.resources.TextResource | skypeHttp.resources.RichTextResource,
+		stanza: IStanza,
 	) {
-		const p = this.puppets[puppetId];
-		if (!p) {
-			return;
-		}
-		const rich = resource.native.messagetype.startsWith("RichText");
-		log.info("Got new skype edit");
-		log.silly(resource);
-		const params = await this.getSendParams(puppetId, resource);
-		if (!params) {
-			log.warn("Couldn't generate params");
-			return;
-		}
-		let msg = resource.content;
-		let emote = false;
-		if (resource.native.skypeemoteoffset) {
-			emote = true;
-			msg = msg.substr(Number(resource.native.skypeemoteoffset));
-		}
-		const dedupeKey = `${puppetId};${params.room.roomId}`;
-		if (await this.messageDeduplicator.dedupe(dedupeKey, params.user.userId, params.eventId, msg)) {
-			log.silly("normal message dedupe");
-			return;
-		}
-		let sendMsg: IMessageEvent;
-		if (rich) {
-			sendMsg = this.skypeMessageParser.parse(msg, { noQuotes: msg.trim().startsWith("<quote") });
-		} else {
-			sendMsg = {
-				body: msg,
-			};
-		}
-		if (emote) {
-			sendMsg.emote = true;
-		}
-		if (resource.content) {
-			await this.puppet.sendEdit(params, resource.id, sendMsg);
-		} else if (p.deletedMessages.has(resource.id)) {
-			log.silly("normal message redact dedupe");
-			return;
-		} else {
-			await this.puppet.sendRedact(params, resource.id);
-		}
+		// TODO
+		// const p = this.puppets[puppetId];
+		// if (!p) {
+		// 	return;
+		// }
+		// const rich = resource.native.messagetype.startsWith("RichText");
+		// log.info("Got new xmpp edit");
+		// log.silly(resource);
+		// const params = await this.getSendParams(puppetId, resource);
+		// if (!params) {
+		// 	log.warn("Couldn't generate params");
+		// 	return;
+		// }
+		// let msg = resource.content;
+		// let emote = false;
+		// if (resource.native.xmppemoteoffset) {
+		// 	emote = true;
+		// 	msg = msg.substr(Number(resource.native.xmppemoteoffset));
+		// }
+		// const dedupeKey = `${puppetId};${params.room.roomId}`;
+		// if (await this.messageDeduplicator.dedupe(dedupeKey, params.user.userId, params.eventId, msg)) {
+		// 	log.silly("normal message dedupe");
+		// 	return;
+		// }
+		// let sendMsg: IMessageEvent;
+		// if (rich) {
+		// 	sendMsg = this.xmppMessageParser.parse(msg, { noQuotes: msg.trim().startsWith("<quote") });
+		// } else {
+		// 	sendMsg = {
+		// 		body: msg,
+		// 	};
+		// }
+		// if (emote) {
+		// 	sendMsg.emote = true;
+		// }
+		// if (resource.content) {
+		// 	await this.puppet.sendEdit(params, resource.id, sendMsg);
+		// } else if (p.deletedMessages.has(resource.id)) {
+		// 	log.silly("normal message redact dedupe");
+		// 	return;
+		// } else {
+		// 	await this.puppet.sendRedact(params, resource.id);
+		// }
 	}
 
-	private async handleSkypeFile(puppetId: number, resource: skypeHttp.resources.FileResource) {
-		const p = this.puppets[puppetId];
-		if (!p) {
-			return;
-		}
-		log.info("Got new skype file");
-		log.silly(resource);
-		const params = await this.getSendParams(puppetId, resource);
-		if (!params) {
-			log.warn("Couldn't generate params");
-			return;
-		}
-		const filename = resource.original_file_name;
-		const dedupeKey = `${puppetId};${params.room.roomId}`;
-		if (await this.messageDeduplicator.dedupe(dedupeKey, params.user.userId, params.eventId, `file:${filename}`)) {
-			log.silly("file message dedupe");
-			return;
-		}
-		const buffer = await p.client.downloadFile(resource.uri);
-		await this.puppet.sendFileDetect(params, buffer, filename);
+	private async handleXmppFile(puppetId: number, stanza: IStanza) {
+		// TODO
+		// const p = this.puppets[puppetId];
+		// if (!p) {
+		// 	return;
+		// }
+		// log.info("Got new xmpp file");
+		// log.silly(resource);
+		// const params = await this.getSendParams(puppetId, resource);
+		// if (!params) {
+		// 	log.warn("Couldn't generate params");
+		// 	return;
+		// }
+		// const filename = resource.original_file_name;
+		// const dedupeKey = `${puppetId};${params.room.roomId}`;
+		// if (await this.messageDeduplicator.dedupe(dedupeKey, params.user.userId, params.eventId, `file:${filename}`)) {
+		// 	log.silly("file message dedupe");
+		// 	return;
+		// }
+		// const buffer = await p.client.downloadFile(resource.uri);
+		// await this.puppet.sendFileDetect(params, buffer, filename);
 	}
 
-	private async handleSkypeTyping(puppetId: number, resource: skypeHttp.resources.Resource, typing: boolean) {
-		const p = this.puppets[puppetId];
-		if (!p) {
-			return;
-		}
-		log.info("Got new skype typing event");
-		log.silly(resource);
-		const params = await this.getSendParams(puppetId, resource);
-		if (!params) {
-			log.warn("Couldn't generate params");
-			return;
-		}
-		await this.puppet.setUserTyping(params, typing);
+	private async handleXmppTyping(puppetId: number, stanza: IStanza, typing: boolean) {
+		// TODO
+		// const p = this.puppets[puppetId];
+		// if (!p) {
+		// 	return;
+		// }
+		// log.info("Got new xmpp typing event");
+		// log.silly(resource);
+		// const params = await this.getSendParams(puppetId, resource);
+		// if (!params) {
+		// 	log.warn("Couldn't generate params");
+		// 	return;
+		// }
+		// await this.puppet.setUserTyping(params, typing);
 	}
 
-	private async handleSkypePresence(puppetId: number, resource: skypeHttp.resources.Resource) {
-		const p = this.puppets[puppetId];
-		if (!p) {
-			return;
-		}
-		log.info("Got new skype presence event");
-		log.silly(resource);
-		const content = JSON.parse(resource.native.content);
-		const contact = await p.client.getContact(content.user);
-		const conversation = await p.client.getConversation({
-			puppetId,
-			roomId: resource.conversation,
-		});
-		if (!contact || !conversation) {
-			log.warn("Couldn't generate params");
-			return;
-		}
-		const params: IReceiveParams = {
-			user: this.getUserParams(puppetId, contact),
-			room: this.getRoomParams(puppetId, conversation),
-		};
-		const [id, _, clientId] = content.consumptionhorizon.split(";");
-		params.eventId = id;
-		await this.puppet.sendReadReceipt(params);
-		params.eventId = clientId;
-		await this.puppet.sendReadReceipt(params);
+	private async handleXmppPresence(puppetId: number, stanza: IStanza) {
+		// TODO
+		// const p = this.puppets[puppetId];
+		// if (!p) {
+		// 	return;
+		// }
+		// log.info("Got new xmpp presence event");
+		// log.silly(resource);
+		// const content = JSON.parse(resource.native.content);
+		// const contact = await p.client.getContact(content.user);
+		// const conversation = await p.client.getConversation({
+		// 	puppetId,
+		// 	roomId: resource.conversation,
+		// });
+		// if (!contact || !conversation) {
+		// 	log.warn("Couldn't generate params");
+		// 	return;
+		// }
+		// const params: IReceiveParams = {
+		// 	user: this.getUserParams(puppetId, contact),
+		// 	room: this.getRoomParams(puppetId, conversation),
+		// };
+		// const [id, _, clientId] = content.consumptionhorizon.split(";");
+		// params.eventId = id;
+		// await this.puppet.sendReadReceipt(params);
+		// params.eventId = clientId;
+		// await this.puppet.sendReadReceipt(params);
 	}
 }

@@ -65,6 +65,7 @@ Also check the config for other values, like your homeserver domain.
 
 ## TODO
 
+- fix "Replaced by new connection"
 - replies
 - edits
 - deletes

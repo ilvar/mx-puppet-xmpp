@@ -15,6 +15,7 @@ import { Log, IRemoteRoom } from "mx-puppet-bridge";
 import { EventEmitter } from "events";
 import { client, xml } from "@xmpp/client";
 import { Client as XmppClient } from "@xmpp/client-core";
+import * as Parser from "node-html-parser";
 
 const log = new Log("XmppPuppet:client");
 
@@ -51,8 +52,17 @@ export class Client extends EventEmitter {
 		return this.loginUsername.split("@")[0].trim();
 	}
 
-	public get host(): string {
+	public get domain(): string {
 		return this.loginUsername.split("@")[1].trim();
+	}
+
+	public async getWebsocket(): Promise<string> {
+		const response = await fetch(`https://${this.domain}/.well-known/host-meta`);
+		const xmlData = await response.text();
+		const document = Parser.parse(xmlData) as unknown as HTMLElement;
+		const relValue = "urn:xmpp:alt-connections:websocket"
+		const line = document.querySelectorAll(`[rel="${relValue}"]`);
+		return line[0].getAttribute('href') as string;
 	}
 
 	public get getState() {
@@ -60,12 +70,14 @@ export class Client extends EventEmitter {
 	}
 
 	public async connect() {
-		log.info("Connecting to ", this.host);
+		const websocketUrl = await this.getWebsocket();
+		log.info("Connecting to ", websocketUrl);
 		log.info(this.username);
+		log.info(this.domain);
 
 		this.api = client({
-			service: "ws://"+this.host+":5280/xmpp-websocket",
-			domain: this.host,
+			service: websocketUrl,
+			domain: this.domain,
 			resource: "mx_bridge",
 			username: this.username,
 			password: this.password,

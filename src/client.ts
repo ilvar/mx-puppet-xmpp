@@ -78,7 +78,7 @@ export class Client extends EventEmitter {
 		this.api = client({
 			service: websocketUrl,
 			domain: this.domain,
-			resource: "mx_bridge",
+			//resource: "mx_bridge",
 			username: this.username,
 			password: this.password,
 		});

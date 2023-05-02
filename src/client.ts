@@ -16,6 +16,7 @@ import { EventEmitter } from "events";
 import { client, xml } from "@xmpp/client";
 import { Client as XmppClient } from "@xmpp/client-core";
 import * as Parser from "node-html-parser";
+import fetch from "node-fetch";
 
 const log = new Log("XmppPuppet:client");
 

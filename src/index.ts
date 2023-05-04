@@ -127,7 +127,9 @@ async function run() {
 			const client = new Client(username, password);
 			await client.connect();
 			data.state = client.getState;
-			await client.disconnect();
+			setTimeout(async () => {
+				await client.disconnect();
+			}, 2000);
 		} catch (err) {
 			log.verbose("Failed to log in as new user, perhaps the password is wrong?");
 			log.silly(err);

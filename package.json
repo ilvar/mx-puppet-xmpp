@@ -10,8 +10,9 @@
     "build": "tsc",
     "lint": "eslint 'src/**/*.ts'",
     "test": "npm run build && node --test test/**/*.test.js",
+    "test:native": "node -e \"const Database=require('better-sqlite3'); const db=new Database(':memory:'); db.prepare('SELECT 1').get(); db.close(); const {createCanvas}=require('canvas'); const canvas=createCanvas(1,1); if(canvas.width!==1||canvas.height!==1) process.exit(1);\"",
     "audit": "npm audit --audit-level=critical",
-    "check": "npm run lint && npm test && npm run audit",
+    "check": "npm run lint && npm test && npm run test:native && npm run audit",
     "start": "npm run build && node ./build/index.js"
   },
   "author": "rkd",

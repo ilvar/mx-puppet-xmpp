@@ -19,7 +19,7 @@
   "license": "Apache-2.0",
   "dependencies": {
     "@xmpp/client": "^0.14.0",
-    "command-line-args": "^5.1.1",
+    "command-line-args": "^6.0.2",
     "command-line-usage": "^5.0.5",
     "mx-puppet-bridge": "0.1.6",
     "node-html-parser": "^9.0.1"

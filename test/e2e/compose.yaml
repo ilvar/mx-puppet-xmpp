@@ -20,16 +20,28 @@ services:
       - synapse-data:/data
     command: ["generate"]
 
-  prosody-init:
+  prosody-init-alice:
     image: prosodyim/prosody:13.0@sha256:e44a7dfedb776c8945b5c6401a3437a009b549923f7bbcb5a480c2de5f86e5d7
     restart: "no"
     environment:
       PROSODY_VIRTUAL_HOSTS: xmpp.test
       PROSODY_NETWORK_HOSTNAME: prosody
       PROSODY_ENABLE_MODULES: websocket
-      LOCAL: alice
-      DOMAIN: xmpp.test
-      PASSWORD: alicepass
+    volumes:
+      - prosody-data:/var/lib/prosody
+      - ./prosody-e2e.cfg.lua:/etc/prosody/conf.d/e2e.cfg.lua:ro
+    command: ["register", "alice", "xmpp.test", "alicepass"]
+
+  prosody-init-bob:
+    image: prosodyim/prosody:13.0@sha256:e44a7dfedb776c8945b5c6401a3437a009b549923f7bbcb5a480c2de5f86e5d7
+    restart: "no"
+    depends_on:
+      prosody-init-alice:
+        condition: service_completed_successfully
+    environment:
+      PROSODY_VIRTUAL_HOSTS: xmpp.test
+      PROSODY_NETWORK_HOSTNAME: prosody
+      PROSODY_ENABLE_MODULES: websocket
     volumes:
       - prosody-data:/var/lib/prosody
       - ./prosody-e2e.cfg.lua:/etc/prosody/conf.d/e2e.cfg.lua:ro
@@ -38,7 +50,7 @@ services:
   prosody:
     image: prosodyim/prosody:13.0@sha256:e44a7dfedb776c8945b5c6401a3437a009b549923f7bbcb5a480c2de5f86e5d7
     depends_on:
-      prosody-init:
+      prosody-init-bob:
         condition: service_completed_successfully
     environment:
       PROSODY_VIRTUAL_HOSTS: xmpp.test

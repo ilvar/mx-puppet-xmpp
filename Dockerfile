@@ -16,7 +16,9 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 COPY package.json package-lock.json ./
-RUN npm ci
+# Compile native dependencies against Bookworm's glibc instead of consuming
+# architecture-specific prebuilds that may require a newer glibc baseline.
+RUN npm_config_build_from_source=true npm ci
 
 COPY tsconfig.json eslint.config.mjs ./
 COPY src/ ./src/

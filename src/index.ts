@@ -4,8 +4,8 @@ import {
 	Log,
 	PuppetBridge,
 } from "mx-puppet-bridge";
-import * as commandLineArgs from "command-line-args";
-import * as commandLineUsage from "command-line-usage";
+import commandLineArgs from "command-line-args";
+import commandLineUsage from "command-line-usage";
 import { Client } from "./client";
 import { Xmpp } from "./xmpp";
 

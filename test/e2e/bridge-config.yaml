@@ -1,0 +1,26 @@
+bridge:
+  bindAddress: 0.0.0.0
+  port: 8438
+  domain: matrix.test
+  homeserverUrl: http://synapse:8008
+
+logging:
+  console: info
+  files: []
+
+database:
+  filename: /data/database.db
+
+provisioning:
+  whitelist:
+    - ".*"
+
+presence:
+  enabled: false
+
+relay:
+  whitelist: []
+
+namePatterns:
+  user: ":name"
+  room: ":name"

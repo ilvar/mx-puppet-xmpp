@@ -1,0 +1,4 @@
+registration_shared_secret: e2e-registration-secret
+app_service_config_files:
+  - /bridge/xmpp-registration.yaml
+suppress_key_server_warning: true

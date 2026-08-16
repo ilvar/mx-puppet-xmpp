@@ -1,0 +1,116 @@
+name: mx-puppet-xmpp-e2e
+
+services:
+  bridge-registration:
+    build:
+      context: ../..
+    image: mx-puppet-xmpp:e2e
+    restart: "no"
+    volumes:
+      - bridge-data:/data
+      - ./bridge-registration-config.yaml:/data/config.yaml:ro
+
+  synapse-generate:
+    image: matrixdotorg/synapse:v1.158.0
+    restart: "no"
+    environment:
+      SYNAPSE_SERVER_NAME: matrix.test
+      SYNAPSE_REPORT_STATS: "no"
+    volumes:
+      - synapse-data:/data
+    command: ["generate"]
+
+  prosody-init:
+    image: prosodyim/prosody:13.0@sha256:e44a7dfedb776c8945b5c6401a3437a009b549923f7bbcb5a480c2de5f86e5d7
+    restart: "no"
+    environment:
+      PROSODY_VIRTUAL_HOSTS: xmpp.test
+      PROSODY_NETWORK_HOSTNAME: prosody
+      PROSODY_ENABLE_MODULES: websocket
+      LOCAL: alice
+      DOMAIN: xmpp.test
+      PASSWORD: alicepass
+    volumes:
+      - prosody-data:/var/lib/prosody
+      - ./prosody-e2e.cfg.lua:/etc/prosody/conf.d/e2e.cfg.lua:ro
+    command: ["register", "bob", "xmpp.test", "bobpass"]
+
+  prosody:
+    image: prosodyim/prosody:13.0@sha256:e44a7dfedb776c8945b5c6401a3437a009b549923f7bbcb5a480c2de5f86e5d7
+    depends_on:
+      prosody-init:
+        condition: service_completed_successfully
+    environment:
+      PROSODY_VIRTUAL_HOSTS: xmpp.test
+      PROSODY_NETWORK_HOSTNAME: prosody
+      PROSODY_ENABLE_MODULES: websocket
+    volumes:
+      - prosody-data:/var/lib/prosody
+      - ./prosody-e2e.cfg.lua:/etc/prosody/conf.d/e2e.cfg.lua:ro
+    healthcheck:
+      test: ["CMD-SHELL", "prosodyctl status >/dev/null 2>&1"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+      start_period: 2s
+
+  synapse:
+    image: matrixdotorg/synapse:v1.158.0
+    depends_on:
+      bridge-registration:
+        condition: service_completed_successfully
+      synapse-generate:
+        condition: service_completed_successfully
+    volumes:
+      - synapse-data:/data
+      - bridge-data:/bridge:ro
+      - ./synapse-overrides.yaml:/config/e2e.yaml:ro
+    command: ["run", "-c", "/data/homeserver.yaml", "-c", "/config/e2e.yaml"]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fSs http://localhost:8008/health >/dev/null"]
+      interval: 2s
+      timeout: 2s
+      retries: 45
+      start_period: 5s
+
+  bridge:
+    build:
+      context: ../..
+    image: mx-puppet-xmpp:e2e
+    depends_on:
+      bridge-registration:
+        condition: service_completed_successfully
+      synapse:
+        condition: service_healthy
+      prosody:
+        condition: service_healthy
+    environment:
+      XMPP_WEBSOCKET_URL: ws://prosody:5280/xmpp-websocket
+      XMPP_ALLOW_INSECURE_WEBSOCKET: "true"
+    volumes:
+      - bridge-data:/data
+      - ./bridge-config.yaml:/data/config.yaml:ro
+
+  e2e:
+    image: mx-puppet-xmpp:e2e
+    depends_on:
+      bridge:
+        condition: service_started
+      synapse:
+        condition: service_healthy
+      prosody:
+        condition: service_healthy
+    entrypoint: ["/usr/local/bin/node", "/e2e/run.mjs"]
+    environment:
+      MATRIX_URL: http://synapse:8008
+      MATRIX_DOMAIN: matrix.test
+      MATRIX_REGISTRATION_SECRET: e2e-registration-secret
+      XMPP_URL: ws://prosody:5280/xmpp-websocket
+      XMPP_DOMAIN: xmpp.test
+    volumes:
+      - ./run.mjs:/e2e/run.mjs:ro
+
+volumes:
+  bridge-data:
+  prosody-data:
+  synapse-data:

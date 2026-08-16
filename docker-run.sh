@@ -1,39 +1,29 @@
-#!/bin/sh -e
+#!/bin/sh
+set -eu
+
+CONFIG_PATH="${CONFIG_PATH:-/data/config.yaml}"
+REGISTRATION_PATH="${REGISTRATION_PATH:-/data/xmpp-registration.yaml}"
 
 if [ ! -f "$CONFIG_PATH" ]; then
-        echo 'No config found'
-        exit 1
+    echo "No config found at $CONFIG_PATH" >&2
+    exit 1
 fi
-
-args="$@"
 
 if [ ! -f "$REGISTRATION_PATH" ]; then
-        echo 'No registration found, generating now'
-        args="-r"
+    echo "No registration found; generating $REGISTRATION_PATH"
+    set -- -r
 fi
 
-
-# if no --uid is supplied, prepare files to drop privileges
 if [ "$(id -u)" = 0 ]; then
-        chown node:node /data
-
-        if find *.db > /dev/null 2>&1; then
-                # make sure sqlite files are writeable
-                chown node:node *.db
-        fi
-        if find *.log.* > /dev/null 2>&1; then
-                # make sure log files are writeable
-                chown node:node *.log.*
-        fi
-
-        su_exec='su-exec node:node'
-else
-        su_exec=''
+    chown node:node /data
+    find /data -maxdepth 1 -type f \( -name '*.db*' -o -name '*.log*' \) -exec chown node:node {} + 2>/dev/null || true
+    exec gosu node:node /usr/local/bin/node /opt/mx-puppet-xmpp/build/index.js \
+        -c "$CONFIG_PATH" \
+        -f "$REGISTRATION_PATH" \
+        "$@"
 fi
 
-# $su_exec is used in case we have to drop the privileges
-exec $su_exec /usr/local/bin/node '/opt/mx-puppet-xmpp/build/index.js' \
-     -c "$CONFIG_PATH" \
-     -f "$REGISTRATION_PATH" \
-     $args
-
+exec /usr/local/bin/node /opt/mx-puppet-xmpp/build/index.js \
+    -c "$CONFIG_PATH" \
+    -f "$REGISTRATION_PATH" \
+    "$@"

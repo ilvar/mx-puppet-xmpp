@@ -1,73 +1,74 @@
-[![donate](https://liberapay.com/assets/widgets/donate.svg)](https://liberapay.com/rkd/donate)
+# mx-puppet-xmpp
 
-# [WIP] mx-puppet-xmpp
-This is a xmpp puppeting bridge for matrix. It is based on [mx-puppet-bridge](https://github.com/Sorunome/mx-puppet-bridge) and provide multi-user instances.
+A Matrix puppeting bridge for XMPP based on `mx-puppet-bridge`.
 
-##
+## Current support
 
-## Quick start using Docker
+- Multi-user account linking
+- One-to-one text messages in both directions
+- Matrix formatted text converted to XEP-0393-style plain-text markup
+- XEP-0156 WebSocket endpoint discovery via `host-meta` / `host-meta.json`
+- Automatic reconnect with bounded exponential backoff
 
-To build docker image:
+Not yet supported: replies, edits, retractions, media, typing notifications, presence bridging, MUCs, MAM/history sync, or OMEMO.
 
+## Requirements
+
+- Node.js 24
+- A Matrix homeserver with application-service support
+- An XMPP server exposing a secure WebSocket endpoint through XEP-0156, or an explicit endpoint via `XMPP_WEBSOCKET_URL`
+
+Plain `ws://` XMPP endpoints are rejected by default. For trusted development environments only, set `XMPP_ALLOW_INSECURE_WEBSOCKET=true`.
+
+## Install from source
+
+```sh
+git clone https://github.com/ilvar/mx-puppet-xmpp.git
+cd mx-puppet-xmpp
+npm ci
+cp sample.config.yaml config.yaml
+# edit config.yaml
+npm run start -- -r
+npm run start
 ```
+
+Copy the generated `xmpp-registration.yaml` into your Synapse configuration and add it to `app_service_config_files` before starting the bridge.
+
+Start a direct chat with the bridge bot (normally `@_xmpppuppet_bot:domain.tld`) and link an account with:
+
+```text
+link user@example.org password
+```
+
+The bridge database contains the XMPP credentials needed to reconnect accounts. Protect the database and its backups accordingly.
+
+## Docker
+
+The published image uses Node 24 on Debian and runs the bridge process as the unprivileged `node` user after preparing `/data`.
+
+```sh
 docker build -t mx-puppet-xmpp:latest .
+docker run --rm -v "$PWD/data:/data" mx-puppet-xmpp:latest
 ```
 
-For docker you probably want the following changes in `config.yaml`:
+Expected files under `/data`:
 
-```yaml
-bindAddress: '0.0.0.0'
-filename: '/data/database.db'
-file: '/data/bridge.log'
+- `config.yaml`
+- `xmpp-registration.yaml` (generated automatically when missing)
+- the configured SQLite database and logs
+
+Useful environment variables:
+
+- `CONFIG_PATH` — defaults to `/data/config.yaml`
+- `REGISTRATION_PATH` — defaults to `/data/xmpp-registration.yaml`
+- `XMPP_WEBSOCKET_URL` — bypass XEP-0156 discovery with a fixed endpoint
+- `XMPP_ALLOW_INSECURE_WEBSOCKET=true` — permit `ws://` instead of requiring `wss://`
+
+## Development
+
+```sh
+npm ci
+npm run check
 ```
 
-Also check the config for other values, like your homeserver domain.
-
-## Install Instructions (from Source)
-
-*   Clone and install:
-    ```
-    git clone https://github.com/Sorunome/mx-puppet-xmpp.git
-    cd mx-puppet-xmpp
-    npm install
-*   Edit the configuration file and generate the registration file:
-    ```
-    cp sample.config.yaml config.yaml
-    # fill info about your homeserver and xmpp app credentials to config.yaml manually
-    npm run start -- -r # generate registration file
-    or
-    docker run -v </path/to/host>/data:/data -it mx-puppet-xmpp -r
-    ```
-*   Copy the registration file to your synapse config directory.
-*   Add the registration file to the list under `app_service_config_files:` in your synapse config.
-*   Restart synapse.
-*   Start the bridge:
-    ```
-    npm run start
-    ```
-*   Start a direct chat with the bot user (`@_xmpppuppet_bot:domain.tld` unless you changed the config).
-    (Give it some time after the invite, it'll join after a minute maybe.)
-*   Get your Xmpp username and password as below, and tell the bot user to link your xmpp account:
-    ```
-    link <username> <password>
-    ```
-*   Tell the bot user to list the available rooms: (also see `help`)
-    ```
-    list
-    ```
-    Clicking rooms in the list will result in you receiving an invite to the bridged room.
-
-## Working
-
-- link
-- text messages (mx -> xmpp)
-- text messages (xmpp -> mx)
-
-## TODO
-
-- fix "Replaced by new connection"
-- replies
-- edits
-- deletes
-- images
-- files
+`npm run check` runs ESLint, TypeScript compilation, and the Node test suite.

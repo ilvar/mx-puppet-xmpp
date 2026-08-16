@@ -1,52 +1,34 @@
-/*
-Copyright 2020 mx-puppet-xmpp
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-    http://www.apache.org/licenses/LICENSE-2.0
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
-
 import {
-	PuppetBridge,
-	IPuppetBridgeRegOpts,
-	Log,
-	IRetData,
-	Util,
 	IProtocolInformation,
+	IRetData,
+	Log,
+	PuppetBridge,
 } from "mx-puppet-bridge";
 import * as commandLineArgs from "command-line-args";
 import * as commandLineUsage from "command-line-usage";
-import * as fs from "fs";
-import * as yaml from "js-yaml";
-import { Xmpp } from "./xmpp";
 import { Client } from "./client";
+import { Xmpp } from "./xmpp";
 
 const log = new Log("XmppPuppet:index");
 
 const commandOptions = [
-	{ name: "register", alias: "r", type: Boolean },
-	{ name: "registration-file", alias: "f", type: String },
-	{ name: "config", alias: "c", type: String },
-	{ name: "help", alias: "h", type: Boolean },
+	{name: "register", alias: "r", type: Boolean},
+	{name: "registration-file", alias: "f", type: String},
+	{name: "config", alias: "c", type: String},
+	{name: "help", alias: "h", type: Boolean},
 ];
 const options = Object.assign({
-	"register": false,
+	register: false,
 	"registration-file": "xmpp-registration.yaml",
-	"config": "config.yaml",
-	"help": false,
+	config: "config.yaml",
+	help: false,
 }, commandLineArgs(commandOptions));
 
 if (options.help) {
-	// tslint:disable-next-line:no-console
 	console.log(commandLineUsage([
 		{
-			header: "Matrix Xmpp Puppet Bridge",
-			content: "A matrix puppet bridge for Xmpp",
+			header: "Matrix XMPP Puppet Bridge",
+			content: "A Matrix puppeting bridge for XMPP",
 		},
 		{
 			header: "Options",
@@ -66,14 +48,13 @@ const protocol: IProtocolInformation = {
 		globalNamespace: true,
 	},
 	id: "xmpp",
-	displayname: "Xmpp",
-	externalUrl: "https://xmpp.com/",
+	displayname: "XMPP",
+	externalUrl: "https://xmpp.org/",
 };
 
 const puppet = new PuppetBridge(options["registration-file"], options.config, protocol);
 
 if (options.register) {
-	// okay, all we have to do is generate a registration file
 	puppet.readConfig(false);
 	try {
 		puppet.generateRegistration({
@@ -82,69 +63,51 @@ if (options.register) {
 			url: `http://${puppet.Config.bridge.bindAddress}:${puppet.Config.bridge.port}`,
 		});
 	} catch (err) {
-		// tslint:disable-next-line:no-console
-		console.log("Couldn't generate registration file:", err);
+		console.error("Couldn't generate registration file:", err);
+		process.exitCode = 1;
 	}
-	process.exit(0);
+} else {
+	void run().catch((err) => {
+		log.error("Bridge failed", err);
+		process.exitCode = 1;
+	});
 }
 
-async function run() {
+async function run(): Promise<void> {
 	await puppet.init();
 	const xmpp = new Xmpp(puppet);
 	puppet.on("puppetNew", xmpp.newPuppet.bind(xmpp));
 	puppet.on("puppetDelete", xmpp.deletePuppet.bind(xmpp));
 	puppet.on("message", xmpp.handleMatrixMessage.bind(xmpp));
-	puppet.on("edit", xmpp.handleMatrixEdit.bind(xmpp));
-	puppet.on("reply", xmpp.handleMatrixReply.bind(xmpp));
-	puppet.on("redact", xmpp.handleMatrixRedact.bind(xmpp));
-	puppet.on("image", xmpp.handleMatrixImage.bind(xmpp));
-	puppet.on("audio", xmpp.handleMatrixAudio.bind(xmpp));
-	puppet.on("file", xmpp.handleMatrixFile.bind(xmpp));
 	puppet.setCreateUserHook(xmpp.createUser.bind(xmpp));
 	puppet.setCreateRoomHook(xmpp.createRoom.bind(xmpp));
 	puppet.setGetDmRoomIdHook(xmpp.getDmRoom.bind(xmpp));
 	puppet.setListUsersHook(xmpp.listUsers.bind(xmpp));
 	puppet.setListRoomsHook(xmpp.listRooms.bind(xmpp));
 	puppet.setGetUserIdsInRoomHook(xmpp.getUserIdsInRoom.bind(xmpp));
-	puppet.setGetDescHook(async (puppetId: number, data: any): Promise<string> => {
-		let s = "Xmpp";
-		if (data.username) {
-			s += ` as \`${data.username}\``;
-		}
-		return s;
+	puppet.setGetDescHook(async (_puppetId: number, data: {username?: string}): Promise<string> => {
+		return data.username ? `XMPP as \`${data.username}\`` : "XMPP";
 	});
 	puppet.setGetDataFromStrHook(async (str: string): Promise<IRetData> => {
-		const retData = {
-			success: false,
-		} as IRetData;
-		const TOKENS_TO_EXTRACT = 2;
-		const [username, password] = str.split(/ (.+)/, TOKENS_TO_EXTRACT);
-		const data: any = {
-			username,
-			password,
-		};
-		try {
-			const client = new Client(username, password);
-			await client.connect();
-			data.state = client.getState;
-			setTimeout(async () => {
-				await client.disconnect();
-			}, 2000);
-		} catch (err) {
-			log.verbose("Failed to log in as new user, perhaps the password is wrong?");
-			log.silly(err);
-			retData.error = "Username or password wrong";
-			return retData;
+		const separator = str.indexOf(" ");
+		if (separator <= 0 || separator === str.length - 1) {
+			return {success: false, error: "Expected: <jid> <password>"} as IRetData;
 		}
-		retData.success = true;
-		retData.data = data;
-		return retData;
+		const username = str.slice(0, separator).trim();
+		const password = str.slice(separator + 1);
+		const data = {username, password};
+		const client = new Client(username, password);
+		try {
+			await client.connect();
+			return {success: true, data} as IRetData;
+		} catch (err) {
+			log.verbose(`Failed to authenticate ${username}`);
+			log.silly(err);
+			return {success: false, error: "Could not authenticate to XMPP"} as IRetData;
+		} finally {
+			await client.disconnect();
+		}
 	});
-	puppet.setBotHeaderMsgHook((): string => {
-		return "Xmpp Puppet Bridge";
-	});
+	puppet.setBotHeaderMsgHook(() => "XMPP Puppet Bridge");
 	await puppet.start();
 }
-
-// tslint:disable-next-line:no-floating-promises
-run();

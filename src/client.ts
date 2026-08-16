@@ -1,229 +1,258 @@
-/*
-Copyright 2020 mx-puppet-xmpp
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-	http://www.apache.org/licenses/LICENSE-2.0
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
-
-import { Log, IRemoteRoom } from "mx-puppet-bridge";
-import { EventEmitter } from "events";
+import { randomUUID } from "node:crypto";
+import { EventEmitter } from "node:events";
 import { client, xml } from "@xmpp/client";
-import { Client as XmppClient } from "@xmpp/client-core";
+import { IRemoteRoom, Log } from "mx-puppet-bridge";
 import * as Parser from "node-html-parser";
-import fetch from "node-fetch";
+import { bareJid, parseJid } from "./jid";
 
 const log = new Log("XmppPuppet:client");
+const WEBSOCKET_REL = "urn:xmpp:alt-connections:websocket";
+const DISCOVERY_TIMEOUT_MS = 10_000;
+const CONNECT_TIMEOUT_MS = 15_000;
+
+type XmppApi = ReturnType<typeof client>;
 
 type Contact = {
-	personId: string,
-	workloads: any,
-	mri: string,
-	blocked: boolean,
-	authorized: boolean,
-	creationTime: Date,
-	displayName: string,
-	displayNameSource: any, // tslint:disable-line no-any
+	personId: string;
+	mri: string;
+	blocked: boolean;
+	authorized: boolean;
+	creationTime: Date;
+	displayName: string;
 	profile: {
-		roomId: string,
-		avatarUrl: string | undefined,
+		roomId: string;
+		avatarUrl: string | undefined;
 		name: {
-			first: string | undefined,
-			surname: string | undefined,
-			nickname: string | undefined,
-		},
-	},
-}
+			first: string | undefined;
+			surname: string | undefined;
+			nickname: string | undefined;
+		};
+	};
+};
 
 export class Client extends EventEmitter {
 	public contacts: Map<string, Contact> = new Map();
-	public conversations: Map<string, any> = new Map();
-	private api: XmppClient;
+	public conversations: Map<string, {id: string; members: string[]}> = new Map();
+	private api?: XmppApi;
+	private readonly account: ReturnType<typeof parseJid>;
+
 	constructor(
-		private loginUsername: string,
-		private password: string,
-	) { super(); }
+		private readonly loginUsername: string,
+		private readonly password: string,
+		private readonly websocketOverride = process.env.XMPP_WEBSOCKET_URL,
+	) {
+		super();
+		this.account = parseJid(loginUsername);
+	}
 
 	public get username(): string {
-		return this.loginUsername.split("@")[0].trim();
+		return this.account.local;
 	}
 
 	public get domain(): string {
-		return this.loginUsername.split("@")[1].trim();
+		return this.account.domain;
+	}
+
+	public get jid(): string {
+		return this.account.bare;
 	}
 
 	public async getWebsocket(): Promise<string> {
-		const response = await fetch(`https://${this.domain}/.well-known/host-meta`);
-		const xmlData = await response.text();
-		const document = Parser.parse(xmlData) as unknown as HTMLElement;
-		const relValue = "urn:xmpp:alt-connections:websocket"
-		const line = document.querySelectorAll(`[rel="${relValue}"]`);
-		return line[0].getAttribute('href') as string;
+		if (this.websocketOverride) {
+			return this.validateWebsocketUrl(this.websocketOverride);
+		}
+
+		const base = `https://${this.domain}`;
+		const errors: string[] = [];
+		try {
+			const response = await this.fetchWithTimeout(`${base}/.well-known/host-meta`);
+			if (!response.ok) {
+				throw new Error(`HTTP ${response.status}`);
+			}
+			const document = Parser.parse(await response.text());
+			const link = document.querySelectorAll("*").find((element) => {
+				return (element.tagName || "").toLowerCase() === "link" && element.getAttribute("rel") === WEBSOCKET_REL;
+			});
+			const href = link?.getAttribute("href");
+			if (!href) {
+				throw new Error("websocket link missing");
+			}
+			return this.validateWebsocketUrl(href);
+		} catch (err) {
+			errors.push(`host-meta: ${this.errorMessage(err)}`);
+		}
+
+		try {
+			const response = await this.fetchWithTimeout(`${base}/.well-known/host-meta.json`);
+			if (!response.ok) {
+				throw new Error(`HTTP ${response.status}`);
+			}
+			const document = await response.json() as {links?: Array<{rel?: string; href?: string}>};
+			const href = document.links?.find((link) => link.rel === WEBSOCKET_REL)?.href;
+			if (!href) {
+				throw new Error("websocket link missing");
+			}
+			return this.validateWebsocketUrl(href);
+		} catch (err) {
+			errors.push(`host-meta.json: ${this.errorMessage(err)}`);
+		}
+
+		throw new Error(`Could not discover an XMPP WebSocket endpoint for ${this.domain}: ${errors.join("; ")}`);
 	}
 
-	public get getState() {
-		return {};
-	}
-
-	public async connect() {
+	public async connect(): Promise<void> {
+		await this.disconnect();
 		const websocketUrl = await this.getWebsocket();
-		log.info("Connecting to ", websocketUrl);
-		log.info(this.username);
-		log.info(this.domain);
+		log.info(`Connecting ${this.jid} to ${websocketUrl}`);
 
-		this.api = client({
+		const api = client({
 			service: websocketUrl,
 			domain: this.domain,
-			//resource: "mx_bridge",
 			username: this.username,
 			password: this.password,
+			timeout: DISCOVERY_TIMEOUT_MS,
 		});
-
-		await this.startupApi();
-
-		this.api.on("error", (err: Error) => {
-			log.error("An error occured", err);
-			this.emit("error", err);
-		});
-		this.api.start();
+		this.api = api;
+		this.startupApi(api);
+		await this.waitUntilOnline(api);
 	}
 
-	public async disconnect() {
-		if (this.api) {
-			await this.api.stop();
-		}
-	}
-
-	public async getContact(username: string): Promise<any> {
-		log.debug(`Fetching contact from: ` + username);
-		if (this.contacts.has(username)) {
-			const ret = this.contacts.get(username);
-			return ret;
+	public async disconnect(): Promise<void> {
+		const api = this.api;
+		this.api = undefined;
+		if (!api) {
+			return;
 		}
 		try {
-			const contact = {
-				personId: username,
-				workloads: null,
-				mri: username,
-				blocked: false,
-				authorized: true,
-				creationTime: new Date(),
-				displayName: username,
-				displayNameSource: "profile" as any, // tslint:disable-line no-any
-				profile: {
-					roomId: username,
-					avatarUrl: undefined,
-					name: {
-						first: undefined,
-						surname: undefined,
-						nickname: username,
-					},
+			await api.stop();
+		} catch (err) {
+			log.warn("Error while stopping XMPP client", err);
+		}
+	}
+
+	public async getContact(username: string): Promise<Contact> {
+		const id = bareJid(username);
+		const cached = this.contacts.get(id);
+		if (cached) {
+			return cached;
+		}
+		const contact: Contact = {
+			personId: id,
+			mri: id,
+			blocked: false,
+			authorized: true,
+			creationTime: new Date(),
+			displayName: id,
+			profile: {
+				roomId: id,
+				avatarUrl: undefined,
+				name: {
+					first: undefined,
+					surname: undefined,
+					nickname: id,
 				},
-			};
-			this.contacts.set(contact.mri, contact);
-			log.debug("Returning new result");
-			log.silly(contact);
-			return contact || null;
-		} catch (err) {
-			// contact not found
-			log.debug("No such contact found");
-			log.debug(err.body || err);
-			return null;
-		}
+			},
+		};
+		this.contacts.set(id, contact);
+		return contact;
 	}
 
-	public async getConversation(room: IRemoteRoom): Promise<any> {
-		log.info(`Fetching conversation`, room);
-		log.info(`Fetching conversation puppetId=${room.puppetId} roomId=${room.roomId}`);
-		let id = room.roomId;
-		if (this.conversations.has(id)) {
-			log.info("Returning cached result");
-			const ret = this.conversations.get(id) || null;
-			log.silly(ret);
-			return ret;
+	public async getConversation(room: IRemoteRoom): Promise<{id: string; members: string[]}> {
+		const id = bareJid(room.roomId);
+		const cached = this.conversations.get(id);
+		if (cached) {
+			return cached;
 		}
-		try {
-			const conversation = {id: room.roomId, members: []};
-			this.conversations.set(room.roomId, conversation || null);
-			log.info("Returning new result");
-			log.info(conversation);
-			return conversation || null;
-		} catch (err) {
-			// conversation not found
-			log.error("No such conversation found");
-			log.error(err.body || err);
-			return null;
-		}
+		const conversation = {id, members: [id]};
+		this.conversations.set(id, conversation);
+		return conversation;
 	}
 
-	public async downloadFile(url: string, type: string = "imgpsh_fullsize_anim") {
-		// TODO
-	}
-
-	public async sendMessage(conversationId: string, msg: string) {
-		return await this.api.send(xml(
+	public async sendMessage(conversationId: string, msg: string): Promise<string> {
+		const api = this.requireApi();
+		const messageId = randomUUID();
+		await api.send(xml(
 			"message",
-			{ type: "chat", to: conversationId },
+			{type: "chat", to: bareJid(conversationId), id: messageId},
 			xml("body", {}, msg),
+			xml("origin-id", {xmlns: "urn:xmpp:sid:0", id: messageId}),
 		));
+		return messageId;
 	}
 
-	public async sendEdit(conversationId: string, messageId: string, msg: string) {
-		// TODO
-		// return await this.api.sendEdit({
-		// 	textContent: msg,
-		// }, conversationId, messageId);
-	}
+	private startupApi(api: XmppApi): void {
+		api.on("stanza", (stanza: any) => {
+			if (!stanza.is("message") || !stanza.getChild("body")) {
+				return;
+			}
+			this.emit("text", stanza);
+		});
 
-	public async sendDelete(conversationId: string, messageId: string) {
-		// TODO
-		// return await this.api.sendDelete(conversationId, messageId);
-	}
-
-	public async sendAudio(
-		conversationId: string,
-		opts: any,
-	) {
-		// TODO
-		// return await this.api.sendAudio(opts, conversationId);
-	}
-
-	public async sendDocument(
-		conversationId: string,
-		opts: any,
-	) {
-		// TODO
-		// return await this.api.sendDocument(opts, conversationId);
-	}
-
-	public async sendImage(
-		conversationId: string,
-		opts: any,
-	) {
-		// TODO
-		// return await this.api.sendImage(opts, conversationId);
-	}
-
-	private async startupApi() {
-		this.api.on("stanza", async (stanza) => {
-			if (stanza.is("message")) {
-				this.emit("text", stanza);
+		api.on("online", async () => {
+			try {
+				await api.send(xml("presence"));
+			} catch (err) {
+				log.error("Failed to send initial presence", err);
 			}
 		});
-		  
-		this.api.on("online", async (address) => {
-			await this.api.send(xml("presence"));
-		});
 
-		// const contacts = await this.api.getContacts();
-		// for (const contact of contacts) {
-		// 	this.contacts.set(contact.mri, contact);
-		// }
+		api.on("error", (err: Error) => {
+			log.error("XMPP client error", err);
+			if (this.listenerCount("error") > 0) {
+				this.emit("error", err);
+			}
+		});
+	}
+
+	private async waitUntilOnline(api: XmppApi): Promise<void> {
+		await new Promise<void>((resolve, reject) => {
+			let settled = false;
+			const finish = (err?: unknown) => {
+				if (settled) return;
+				settled = true;
+				clearTimeout(timer);
+				api.removeListener("online", onOnline);
+				api.removeListener("error", onError);
+				if (err) reject(err); else resolve();
+			};
+			const onOnline = () => finish();
+			const onError = (err: Error) => finish(err);
+			const timer = setTimeout(() => finish(new Error("Timed out waiting for XMPP authentication")), CONNECT_TIMEOUT_MS);
+			api.once("online", onOnline);
+			api.once("error", onError);
+			Promise.resolve(api.start()).catch(onError);
+		});
+	}
+
+	private async fetchWithTimeout(url: string): Promise<Response> {
+		const controller = new AbortController();
+		const timer = setTimeout(() => controller.abort(), DISCOVERY_TIMEOUT_MS);
+		try {
+			return await fetch(url, {
+				signal: controller.signal,
+				headers: {accept: "application/xrd+xml, application/json;q=0.9, */*;q=0.1"},
+			});
+		} finally {
+			clearTimeout(timer);
+		}
+	}
+
+	private validateWebsocketUrl(value: string): string {
+		const url = new URL(value);
+		if (url.protocol === "wss:") return url.toString();
+		if (url.protocol === "ws:" && process.env.XMPP_ALLOW_INSECURE_WEBSOCKET === "true") {
+			log.warn(`Using insecure XMPP WebSocket endpoint ${url.toString()}`);
+			return url.toString();
+		}
+		throw new Error("XMPP WebSocket endpoint must use wss:// (set XMPP_ALLOW_INSECURE_WEBSOCKET=true to allow ws://)");
+	}
+
+	private requireApi(): XmppApi {
+		if (!this.api) throw new Error("XMPP client is not connected");
+		return this.api;
+	}
+
+	private errorMessage(err: unknown): string {
+		return err instanceof Error ? err.message : String(err);
 	}
 }
-

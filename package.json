@@ -1,32 +1,42 @@
 {
   "name": "mx-puppet-xmpp",
   "version": "0.0.0",
-  "description": "",
-  "main": "index.js",
+  "description": "Matrix puppeting bridge for XMPP",
+  "main": "build/index.js",
+  "engines": {
+    "node": ">=24 <25"
+  },
   "scripts": {
     "build": "tsc",
-    "lint": "tslint --project ./tsconfig.json -t stylish",
-    "start": "npm run-script build && node ./build/index.js",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "lint": "eslint 'src/**/*.ts'",
+    "test": "npm run build && node --test test/**/*.test.js",
+    "test:native": "node -e \"const Database=require('better-sqlite3'); const db=new Database(':memory:'); db.prepare('SELECT 1').get(); db.close(); const {createCanvas}=require('canvas'); const canvas=createCanvas(1,1); if(canvas.width!==1||canvas.height!==1) process.exit(1);\"",
+    "audit": "npm audit --audit-level=critical",
+    "check": "npm run lint && npm test && npm run test:native && npm run audit",
+    "start": "npm run build && node ./build/index.js"
   },
   "author": "rkd",
+  "license": "Apache-2.0",
   "dependencies": {
-    "@xmpp/client": "^0.13.0",
-    "@xmpp/client-core": "^0.13.1",
-    "cheerio": "^1.0.0-rc.3",
+    "@xmpp/client": "^0.14.0",
     "command-line-args": "^5.1.1",
     "command-line-usage": "^5.0.5",
-    "decode-html": "^2.0.0",
-    "escape-html": "^1.0.3",
-    "expire-set": "^1.0.0",
-    "js-yaml": "^3.13.1",
     "mx-puppet-bridge": "0.1.6",
-    "node-emoji": "^1.10.0",
-    "node-html-parser": "^1.2.13",
-    "tslint": "^5.17.0",
-    "typescript": "^3.7.4"
+    "node-html-parser": "^9.0.1"
   },
   "devDependencies": {
-    "@types/node": "^12.0.8"
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^24.0.0",
+    "eslint": "^10.8.0",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.65.0"
+  },
+  "overrides": {
+    "better-sqlite3": "13.0.2",
+    "canvas": "3.2.3"
+  },
+  "allowScripts": {
+    "better-sqlite3@13.0.2": true,
+    "canvas@3.2.3": true
   }
 }

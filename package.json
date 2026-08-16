@@ -10,7 +10,8 @@
     "build": "tsc",
     "lint": "eslint 'src/**/*.ts'",
     "test": "npm run build && node --test test/**/*.test.js",
-    "check": "npm run lint && npm test",
+    "audit": "npm audit --audit-level=critical",
+    "check": "npm run lint && npm test && npm run audit",
     "start": "npm run build && node ./build/index.js"
   },
   "author": "rkd",
@@ -32,5 +33,9 @@
   "overrides": {
     "better-sqlite3": "13.0.2",
     "canvas": "3.2.3"
+  },
+  "allowScripts": {
+    "better-sqlite3@13.0.2": true,
+    "canvas@3.2.3": true
   }
 }

@@ -1,70 +1,71 @@
-/*
-Copyright 2020 mx-puppet-xmpp
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-    http://www.apache.org/licenses/LICENSE-2.0
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
-
 import * as Parser from "node-html-parser";
-import * as escapeHtml from "escape-html";
 
+/**
+ * Convert Matrix formatted HTML into XEP-0393-compatible plain-text styling.
+ * The returned value is suitable for use as an XMPP <body>; XML escaping is
+ * deliberately left to the XMPP XML builder.
+ */
 export class MatrixMessageParser {
 	public parse(msg: string): string {
-		const nodes = Parser.parse(`<wrap>${msg}</wrap>`, {
-			lowerCaseTagName: true,
-			pre: true,
-		});
-		return this.walkNode(nodes);
+		const nodes = Parser.parse(`<wrap>${msg}</wrap>`);
+		return this.walkNode(nodes).trimEnd();
 	}
 
 	private walkChildNodes(node: Parser.Node): string {
-		return node.childNodes.map((n) => this.walkNode(n)).join("");
-	}
-
-	private escape(s: string): string {
-		return s;
+		return node.childNodes.map((child) => this.walkNode(child)).join("");
 	}
 
 	private walkNode(node: Parser.Node): string {
-		if (node.nodeType === Parser.NodeType.TEXT_NODE) {
-			return this.escape((node as Parser.TextNode).text);
-		} else if (node.nodeType === Parser.NodeType.ELEMENT_NODE) {
-			const nodeHtml = node as Parser.HTMLElement;
-			switch (nodeHtml.tagName) {
-				case "em":
-				case "i":
-					return `<i raw_pre="_" raw_post="_">${this.walkChildNodes(nodeHtml)}</i>`;
-				case "strong":
-				case "b":
-					return `<b raw_pre="*" raw_post="*">${this.walkChildNodes(nodeHtml)}</b>`;
-				case "del":
-					return `<s raw_pre="~" raw_post="~">${this.walkChildNodes(nodeHtml)}</s>`;
-				case "code":
-					return `<pre raw_pre="{code}" raw_post="{code}">${this.walkChildNodes(nodeHtml)}</pre>`;
-				case "a": {
-					const href = nodeHtml.attributes.href;
-					const inner = this.walkChildNodes(nodeHtml);
-					return `<a href="${escapeHtml(href)}">${inner}</a>`;
-				}
-				case "blockquote":
-					return `<quote>${this.walkChildNodes(nodeHtml)}</quote>`;
-				case "wrap":
-					return this.walkChildNodes(nodeHtml);
-				case "mx-reply": // disgard replies
-					return "";
-				default:
-					if (!nodeHtml.tagName) {
-						return this.walkChildNodes(nodeHtml);
-					}
-					return `<${nodeHtml.tagName}>${this.walkChildNodes(nodeHtml)}</${nodeHtml.tagName}>`;
-			}
+		if (node instanceof Parser.TextNode) {
+			return node.text;
 		}
-		return "";
+		if (!(node instanceof Parser.HTMLElement)) {
+			return "";
+		}
+
+		const tagName = (node.tagName || "").toLowerCase();
+		const children = () => this.walkChildNodes(node);
+		switch (tagName) {
+			case "em":
+			case "i":
+				return `_${children()}_`;
+			case "strong":
+			case "b":
+				return `*${children()}*`;
+			case "del":
+			case "s":
+				return `~${children()}~`;
+			case "code":
+				return `\`${children()}\``;
+			case "pre":
+				return `\n\`\`\`\n${children()}\n\`\`\`\n`;
+			case "a": {
+				const href = node.getAttribute("href") || "";
+				const label = children();
+				if (!href || label === href) {
+					return label || href;
+				}
+				return `${label} (${href})`;
+			}
+			case "blockquote": {
+				const body = children().replace(/\n+$/, "");
+				return body.split("\n").map((line) => `> ${line}`).join("\n") + "\n";
+			}
+			case "br":
+				return "\n";
+			case "p":
+			case "div":
+				return `${children()}\n`;
+			case "li":
+				return `- ${children()}\n`;
+			case "ul":
+			case "ol":
+			case "wrap":
+				return children();
+			case "mx-reply":
+				return "";
+			default:
+				return children();
+		}
 	}
 }

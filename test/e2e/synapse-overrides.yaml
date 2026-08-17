@@ -1,0 +1,9 @@
+registration_shared_secret: e2e-registration-secret
+app_service_config_files:
+  - /bridge/xmpp-registration.yaml
+# mx-puppet-bridge 0.1.6 still authenticates homeserver -> appservice
+# requests with the legacy access_token query parameter. Modern Synapse sends
+# the spec-compliant Authorization header by default; enable its compatibility
+# mode in this isolated E2E homeserver until the bridge framework is replaced.
+use_appservice_legacy_authorization: true
+suppress_key_server_warning: true

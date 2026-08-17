@@ -71,4 +71,24 @@ npm ci
 npm run check
 ```
 
-`npm run check` runs ESLint, TypeScript compilation, and the Node test suite.
+`npm run check` runs ESLint, TypeScript compilation, the Node unit tests, native dependency smoke tests, and the critical-level dependency audit.
+
+### End-to-end tests
+
+The E2E suite is self-contained and requires only Docker with Compose v2:
+
+```sh
+npm run test:e2e
+```
+
+It builds the current bridge image and starts isolated Synapse and Prosody containers, generates the Matrix application-service registration, creates Matrix/XMPP test accounts, links the XMPP account through the real bridge bot flow, and then tears the stack down including its volumes.
+
+The black-box suite verifies:
+
+1. invalid XMPP credentials are rejected rather than creating a link;
+2. valid XMPP credentials create a puppet;
+3. body-less XMPP message stanzas do not break the bridge;
+4. XMPP → Matrix text delivery;
+5. Matrix → XMPP text delivery.
+
+On failure, the runner prints the full Compose service state and logs before cleanup. The same suite runs automatically in the `E2E` GitHub Actions workflow.

@@ -60,7 +60,10 @@ services:
       - prosody-data:/var/lib/prosody
       - ./prosody-e2e.cfg.lua:/etc/prosody/conf.d/e2e.cfg.lua:ro
     healthcheck:
-      test: ["CMD-SHELL", "prosodyctl status >/dev/null 2>&1"]
+      # The official image runs Prosody in the foreground (`prosody -F`), so
+      # probe the WebSocket HTTP listener that the bridge actually depends on
+      # instead of using process-control-oriented `prosodyctl status`.
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/5280"]
       interval: 2s
       timeout: 2s
       retries: 30

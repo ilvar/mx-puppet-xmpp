@@ -30,7 +30,7 @@
     "@types/node": "^26.6.3",
     "eslint": "^10.11.0",
     "typescript": "^6.0.3",
-    "typescript-eslint": "^8.70.1"
+    "typescript-eslint": "^8.71.0"
   },
   "overrides": {
     "better-sqlite3": "13.0.2",
